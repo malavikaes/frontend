@@ -1,16 +1,18 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Platform } from 'react-native';
-
+import { Platform, Pressable, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { HapticTab } from '@/components/HapticTab';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import TabBarBackground from '@/components/ui/TabBarBackground';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { UnreadNotificationsProvider, useUnreadNotifications } from '../../components/UnreadNotificationsContext';
 
-export default function TabLayout() {
+function TabLayout() {
   const colorScheme = useColorScheme();
-
+  const router = useRouter();
   return (
     <Tabs
       screenOptions={{
@@ -31,6 +33,33 @@ export default function TabLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          headerShown: true,
+          headerRight: () => {
+            const { unread } = useUnreadNotifications();
+            return (
+              <Pressable onPress={() => { router.push('/(tabs)/notifications'); }} style={{ marginRight: 16 }}>
+                <Ionicons name="notifications-outline" size={26} color={Colors[colorScheme ?? 'light'].tint} />
+                {unread && (
+                  <View style={{
+                    position: 'absolute',
+                    top: 2,
+                    right: 2,
+                    width: 10,
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: 'red',
+                  }} />
+                )}
+              </Pressable>
+            );
+          },
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'Notifications',
+          tabBarIcon: ({ color }) => <Ionicons name="notifications-outline" size={26} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -41,5 +70,13 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+  );
+}
+
+export default function LayoutWrapper() {
+  return (
+    <UnreadNotificationsProvider>
+      <TabLayout />
+    </UnreadNotificationsProvider>
   );
 }

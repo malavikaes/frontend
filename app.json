@@ -8,6 +8,10 @@
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#ffffff"
+    },
     "ios": {
       "supportsTablet": true
     },
@@ -34,7 +38,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
@@ -44,6 +49,7 @@
       "eas": {
         "projectId": "63662266-518b-4595-b8cf-88035f5e7206"
       }
-    }
+    },
+    "owner": "nikhil2412_17-1993"
   }
 }

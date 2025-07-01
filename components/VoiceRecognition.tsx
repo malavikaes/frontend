@@ -1,103 +1,147 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useContext } from 'react';
 import {
   View,
   Text,
-  Alert,
-  TouchableOpacity,
   ScrollView,
+  TouchableOpacity,
   ActivityIndicator,
   TextInput,
+  Platform,
 } from 'react-native';
-import { Audio } from 'expo-av';
-import { uploadAudio } from './uploadAudio'; 
-import styles from './VoiceRecognitionStyles'; 
+import { Picker } from '@react-native-picker/picker';
+import * as Speech from 'expo-speech'; // ✅ TTS import
+import styles from './VoiceRecognitionStyles';
+import useAudioRecorder from './useAudioRecorder';
+import { uploadAudio } from './uploadAudio';
+import TextToVoice from '../components/TextToVoice'; // ✅ Ensure this exists
+import { BACKEND_BASE_URL } from '../constants/Backend';
+import { AuthContext } from '../app/_layout';
+
+// Type guard for objects with duration
+function hasDuration(obj: any): obj is { duration: number } {
+  return obj && typeof obj === 'object' && 'duration' in obj && typeof obj.duration === 'number';
+}
 
 export default function VoiceRecognition() {
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [recordedUri, setRecordedUri] = useState<string | null>(null);
-  const [message, setMessage] = useState<string>('');
-  const [transcription, setTranscription] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const [message, setMessage] = useState('');
+  const [transcription, setTranscription] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<string>('');
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
+  const { user } = useContext(AuthContext);
 
-  const startRecording = async () => {
-    try {
-      setMessage('🎙️ Requesting Microphone Permissions...');
-      console.log('🟢 Recording Start...');
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('🎧 Permission Denied', 'Please enable Microphone Access.');
-        return;
-      }
+  const {
+    recording,
+    recordedUri,
+    startRecording,
+    stopRecording,
+    playRecording,
+  } = useAudioRecorder();
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
+  const handleStart = () => startRecording(setMessage);
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-
-      setRecording(recording);
-      setMessage('🟢 Recording Start...');
-    } catch (error) {
-      console.error('❌ Error Start Recording:', error);
-      setMessage('❌ Failed to Start Recording');
-    }
-  };
-
-  const stopRecording = async () => {
-    try {
-      if (!recording) return;
-
-      setMessage('⏹️ Recording Stop...');
-      console.log('🔴 Recording Stop...');
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
-
-      if (uri) {
-        setRecordedUri(uri);
-        setMessage('📤 Upload Audio...');
-        setLoading(true);
-
+  const handleStop = async () => {
+    const uri = await stopRecording(setMessage);
+    if (uri) {
+      setLoading(true);
+      setMessage('📤 Uploading Audio...');
+      try {
         const result = await uploadAudio(uri);
-        console.log('✅ Upload Complete:', result);
-        setMessage('✅ Upload Successfully!');
+        console.log('✅ Upload Result:', result);
 
         setMessage('🧠 Transcribing...');
-        if (result?.transcription) {
-          setTranscription(prev => (prev ? `${prev} ${result.transcription}` : result.transcription));
-          setMessage('✅ Transcription Complete!');
-        } else {
-          setMessage('❌ Transcription failed.');
+        const text = result.transcription || result.transcript;
+        
+        // Set audio duration if available (even if transcription failed)
+        if (hasDuration(result)) {
+          setAudioDuration(result.duration);
         }
-
-        setLoading(false);
+        
+        if (text) {
+          setTranscription(prev => (prev ? `${prev} ${text}` : text));
+          setMessage(`✅ Transcription Complete!${hasDuration(result) ? ` (Duration: ${result.duration}s)` : ''}`);
+        } else {
+          // Show duration even if transcription failed
+          if (hasDuration(result)) {
+            setMessage(`⚠️ Could not transcribe audio (Duration: ${result.duration}s)`);
+        } else {
+          setMessage('❌ No Transcription Found');
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        // Show duration if present in error
+        if (hasDuration(err)) {
+          setAudioDuration(err.duration);
+          setMessage(`❌ Upload/Transcription Error (Duration: ${err.duration}s)`);
+        } else {
+        setMessage('❌ Upload Error');
+        }
       }
-    } catch (error) {
-      console.error('❌ Error during Stop/Upload:', error);
-      setMessage('❌ An error Occurred');
       setLoading(false);
     }
   };
 
-  const playRecording = async () => {
-    if (!recordedUri) return;
-    try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
+  const handleTextToSpeech = () => {
+    if (transcription.trim()) {
+      setMessage('🔊 Speaking...');
+      Speech.speak(transcription, {
+        rate: 1.0,
+        pitch: 1.0,
+        language: 'en-US',
+        onDone: () => setMessage('✅ Done Speaking'),
+      });
+    } else {
+      setMessage('⚠️ Nothing to Speak');
+    }
+  };
 
-      const { sound } = await Audio.Sound.createAsync({ uri: recordedUri });
-      soundRef.current = sound;
-      await sound.playAsync();
-      setMessage('▶️ Recording Play...');
+  const handleSend = async () => {
+    if (!transcription.trim()) {
+      setMessage('⚠️ Please Transcribe Something First.');
+      return;
+    }
+    if (!selectedAgent) {
+      setMessage('⚠️ Please Select a Target Agent.');
+      return;
+    }
+    
+    if (!user || !user.username || !user.password) {
+      setMessage('⚠️ User credentials not available. Please login again.');
+      return;
+    }
+
+    const INSERT_URL = `${BACKEND_BASE_URL}/insert`;
+
+    try {
+      setMessage('📤 Sending to Client Agent...');
+      const response = await fetch(INSERT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text_data: transcription,
+          target_agent: selectedAgent,
+          target_column: 'COLUMN_Y',
+          username: user.username,
+          password: user.password,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.selenium_result) {
+        // Show both parsed fields and selenium result
+        const displayText = `🔍 PARSED FIELDS:\n${result.parsed_fields || 'No fields extracted'}\n\n🤖 SELENIUM RESULT:\n${result.selenium_result}`;
+        setTranscription(displayText);
+        setMessage('✅ Text parsed and form filled successfully!');
+      } else {
+        setMessage(`❌ Insert Failed: ${result.error || 'Unknown Error'}`);
+      }
     } catch (error) {
-      console.error('❌ Playback error:', error);
-      setMessage('❌ Could not Play Audio');
+      console.error('❌ Send Error:', error);
+      setMessage('❌ Network Error');
     }
   };
 
@@ -112,33 +156,83 @@ export default function VoiceRecognition() {
       <Text style={styles.title}>🎙️ Voice Recognition System</Text>
       <Text style={styles.status}>{message}</Text>
 
-      {loading && <ActivityIndicator size="large" color="#007AFF" style={{ marginBottom: 20 }} />}
+      {loading && <ActivityIndicator size="large" color="#007AFF" />}
 
       {renderButton(
-        recording ? '🔕 Stop Recording' : '🔊 Start Recording',
-        recording ? stopRecording : startRecording,
-        recording ? '#FF3B30' : '#328538'
+        recording ? '🔴 Stop Recording' : '🟢 Start Recording',
+        recording ? handleStop : handleStart,
+        recording ? '#FF3B30' : '#34C759'
       )}
 
-      {recordedUri && renderButton('▶️ Play Recording', playRecording, '#007AFF')}
+      {recordedUri && renderButton('▶️ Play Recording', () => playRecording(setMessage), '#FF1493')}
 
-      {transcription !== '' && (
-  <>
-    <Text style={styles.transcriptionTitle}>📝 Transcription Text (Editable):</Text>
-    <View style={styles.transcriptionContainer}>
+      <Text style={styles.transcriptionTitle}>📝 Transcribed Text:</Text>
       <TextInput
         style={styles.transcriptionTextInput}
         value={transcription}
         onChangeText={setTranscription}
         multiline
         numberOfLines={6}
-        placeholder="Edit transcription here..."
         textAlignVertical="top"
+        placeholder="Transcribed Text will Appear Here..."
       />
-    </View>
-  </>
-)}
 
+      {audioDuration && (
+        <Text style={styles.durationText}>⏱️ Audio Duration: {audioDuration} seconds</Text>
+      )}
+
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 10 }}>
+        <TouchableOpacity style={[styles.button, { backgroundColor: '#FF8C00', width: 150, height: 50, justifyContent: 'center', alignItems: 'center' }]}
+           onPress={() => {
+             if (transcription.trim()) {
+              // Use expo-speech directly or trigger a handler in the parent
+              Speech.speak(transcription, {
+                rate: 1.0,
+                pitch: 1.0,
+              });
+            }
+          }}>
+          <Text style={styles.buttonText}>🔈 Speak</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.button, { backgroundColor: '#800080', width: 150, height: 50, justifyContent: 'center', alignItems: 'center' }]}
+          onPress={() => setTranscription('')}
+        >
+        <Text style={styles.buttonText}>🗑️ Clear</Text>
+       </TouchableOpacity>
+      </View>
+
+      <Text style={styles.agentTitle}>🎯 Select Target Agent:</Text>
+      <View style={styles.dropdownWrapper}>
+        <Picker
+          selectedValue={selectedAgent}
+          onValueChange={(itemValue: string) => setSelectedAgent(itemValue)}
+          style={styles.picker}
+          dropdownIconColor="#333"
+          mode="dropdown"
+        >
+          <Picker.Item label="------- Select Agent -------" value="" />
+          <Picker.Item label="Agent A" value="Agent A" />
+          <Picker.Item label="Agent B" value="Agent B" />
+          <Picker.Item label="Agent C" value="Agent C" />
+        </Picker>
+      </View>
+
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 10 }}>
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#FFD700', width: 150, height: 50, justifyContent: 'center', alignItems: 'center' }]}
+          onPress={handleTextToSpeech}
+        >
+          <Text style={styles.buttonText}>🎧 Listening</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#00BFFF', width: 150, height: 50, justifyContent: 'center', alignItems: 'center' }]}
+          onPress={handleSend}
+        >
+          <Text style={styles.buttonText}>📤 Send</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
